@@ -33,7 +33,7 @@ docker pull smanx/deepseek-harness:latest
 docker run -d \
   --name dsh-harness \
   -p 3080:3080 \
-  -v dsh-data:/root/.dsh \
+  -v dsh-data:/home/node/.dsh \
   --restart unless-stopped \
   smanx/deepseek-harness:latest
 
@@ -48,10 +48,10 @@ The WebSocket realtime channels (`/api/events.mux`, `/api/events.host`) are forw
 
 | Tag | Purpose | Included tools |
 |---|---|---|
-| `latest` | Slim runtime image | None (only Node runtime + DSH + reverse proxy) |
-| `devtools-min-latest` | Minimal tools for common debugging | git, curl, wget, nano, jq, procps, ca-certificates, unzip; npm globals: pnpm; uv |
-| `devtools-latest` | Full tools for developing/compiling inside the container | everything in Minimal + vim, openssh-client, zip, htop, tmux, tree, openssl, python3, build-essential (make/g++), bash-completion; npm globals: pnpm; uv |
-| `admin-latest` | Admin variant: **latest DSH pre-installed**, works out of the box; admin page to pick/install/switch versions | same as Full Tools (pnpm, uv) + manager service; keeps python3/build-essential to compile node-pty at runtime |
+| `latest` | Slim runtime image | No dev tools; pnpm 12.14.0 |
+| `devtools-min-latest` | Minimal tools for common debugging | git, curl, wget, nano, jq, procps, ca-certificates, unzip; pnpm 12.14.0; uv |
+| `devtools-latest` | Full tools for developing/compiling inside the container | everything in Minimal + vim, openssh-client, zip, htop, tmux, tree, openssl, python3, build-essential (make/g++), bash-completion; pnpm 12.14.0; uv |
+| `admin-latest` | Admin variant: **latest DSH pre-installed**, works out of the box; admin page to pick/install/switch versions | same as Full Tools (pnpm 12.14.0, uv) + manager service; keeps python3/build-essential to compile node-pty at runtime |
 
 > Each tag also has a matching **versioned tag**: `latest` ↔ `<version>`, `devtools-latest` ↔ `devtools-<version>`, `devtools-min-latest` ↔ `devtools-min-<version>`, `admin-latest` ↔ `admin-<version>` (admin pre-installs the latest DSH, so its version tag is the DSH version).
 
@@ -62,7 +62,7 @@ The WebSocket realtime channels (`/api/events.mux`, `/api/events.host`) are forw
 docker run -d \
   --name dsh-harness \
   -p 3080:3080 \
-  -v dsh-data:/root/.dsh \
+  -v dsh-data:/home/node/.dsh \
   --restart unless-stopped \
   smanx/deepseek-harness:latest
 
@@ -71,7 +71,7 @@ docker run -d \
 docker run -d \
   --name dsh-harness \
   -p 3080:3080 \
-  -v dsh-data:/root/.dsh \
+  -v dsh-data:/home/node/.dsh \
   --restart unless-stopped \
   smanx/deepseek-harness:devtools-min-latest
 
@@ -80,16 +80,28 @@ docker run -d \
 docker run -d \
   --name dsh-harness \
   -p 3080:3080 \
-  -v dsh-data:/root/.dsh \
+  -v dsh-data:/home/node/.dsh \
   --restart unless-stopped \
   smanx/deepseek-harness:devtools-latest
 ```
 
 The run command is identical across all three tags — only the image name (tag) changes. The tooled variants are a bit larger than the slim image, so pick what fits.
 
-The tooled variants (`devtools` / `devtools-min` / `test`) ship with **pnpm** (installed via npm globally). DSH's `dsh plugin` command relies on pnpm to manage plugins, and the community plugin market [dsh-market](https://github.com/dsh-market/dsh-market) (`dsh plugin --profile web add dshmarket`) needs it too. The slim `latest` does not bundle it — on first plugin use, dsh-market detects the missing pnpm and offers one-click automatic setup.
+**pnpm 12.14.0 is built into every tag**, including the slim `latest` (installed once in the
+Dockerfile, read-only+executable for `node` at runtime). DSH's `dsh plugin` command relies on pnpm to
+manage plugins, and the community plugin market [dsh-market](https://github.com/dsh-market/dsh-market)
+(`dsh plugin --profile web add dshmarket`) works out of the box — no pnpm installation needed.
 
-They also ship **uv** (Python package manager, static binary, no system Python required). Many community MCP servers launch via `uvx` / `uv run` (commonly seen in DSH MCP client configs as `"command": "uvx"`) — without uv those MCPs cannot run.
+`github:` plugins need `git` to install, and only the devtools / devtools-min / test / admin variants
+include git; on the slim `latest`, install plugins by npm package name instead.
+
+The tooled variants (devtools-min / devtools / test / admin) also ship **uv** (Python package manager, static binary, no system Python required).
+Many community MCP servers launch via `uvx` / `uv run` (commonly seen in DSH MCP client configs as
+`"command": "uvx"`) — without uv those MCPs cannot run.
+
+All variants run as the non-root user **`node` (UID/GID `1000:1000`)**: `docker exec` defaults to
+node (`docker exec dsh-harness id` → `uid=1000(node)`), `docker exec -u 0` is for emergency
+troubleshooting only, the data directory is `/home/node/.dsh`, and `/app` / `/usr/local` are read-only.
 
 #### Admin variant (latest DSH pre-installed)
 
@@ -105,13 +117,63 @@ The `admin` variant **pre-installs the latest DSH (@next)**. After the container
 docker run -d \
   --name dsh-harness \
   -p 3080:3080 \
-  -v dsh-data:/root/.dsh \
+  -v dsh-data:/home/node/.dsh \
   -v dsh-install:/opt/dsh \
   --restart unless-stopped \
   smanx/deepseek-harness:admin-latest
 ```
 
 > The admin variant keeps `python3` + `build-essential` (node-pty has no Linux prebuilds, so installing other DSH versions from the page needs to compile the native module from source in-container), making the image a bit larger than the slim one.
+> Admin must write `/opt/dsh`, `/home/node/.dsh` and `/tmp`, so it does **not** support `--read-only`.
+
+### Runtime user and permissions (non-root)
+
+Every tag runs as `node` (UID/GID `1000:1000`); the image sets `USER node` statically:
+
+| Path | Owner / mode | Purpose |
+|---|---|---|
+| `/app` | `root:root 0755` | proxy and manager code, read-only |
+| `/usr/local` | `root:root 0755` | Node and global DSH packages, read-only+executable |
+| `/home/node/.dsh` | `1000:1000` | DSH data directory (mount a named volume) |
+| `/opt/dsh` | `1000:1000` | admin DSH install directory (mount a named volume) |
+| `/tmp` | writable | logs `/tmp/.dsh-web.log`, launch token `/tmp/.dsh-launch-token` (`0600`) |
+
+- `docker exec` defaults to `node`; `docker exec -u 0` is an emergency escape hatch only;
+- **bind mounts** follow the host directory's ownership: run `sudo chown -R 1000:1000 <host-dir>`
+  before mounting, otherwise `node` cannot write the data directory;
+- named volumes inherit their owner on first mount and are independent of the host UID — prefer them.
+
+### Optional hardening
+
+```bash
+# Least privilege + no privilege escalation (all tags)
+docker run -d \
+  --name dsh-harness \
+  -p 3080:3080 \
+  -v dsh-data:/home/node/.dsh \
+  --cap-drop=ALL \
+  --security-opt no-new-privileges \
+  --restart unless-stopped \
+  smanx/deepseek-harness:latest
+
+# Read-only rootfs (latest / devtools-min / devtools / test; not supported by admin)
+docker run -d \
+  --name dsh-harness \
+  -p 3080:3080 \
+  -v dsh-data:/home/node/.dsh \
+  --read-only \
+  --tmpfs /tmp:rw,size=64m \
+  --restart unless-stopped \
+  smanx/deepseek-harness:latest
+```
+
+- `--read-only` only makes the rootfs read-only; named volumes and tmpfs stay writable — logs, token
+  and temporary files all live in `/tmp`, hence `--tmpfs /tmp`;
+- Do not add `noexec` to `/tmp`: DSH writes shell integration scripts there, and `noexec` may break
+  tool execution;
+- admin writes `/opt/dsh`, `/home/node/.dsh`, `/tmp` and the npm cache, so it does not support `--read-only`;
+- the static `USER node` needs no root initialization, so `--cap-drop=ALL` does not break startup
+  (there are no chown/setuid steps).
 
 ## Quick Start (pull & run)
 
@@ -127,7 +189,7 @@ docker pull ghcr.io/smanx/deepseek-harness:latest
 docker run -d \
   --name dsh-harness \
   -p 3080:3080 \
-  -v dsh-data:/root/.dsh \
+  -v dsh-data:/home/node/.dsh \
   --restart unless-stopped \
   ghcr.io/smanx/deepseek-harness:latest
 ```
@@ -154,7 +216,7 @@ docker run -d \
 docker run -d \
   --name dsh-harness \
   -p 3080:3080 \
-  -v dsh-data:/root/.dsh \
+  -v dsh-data:/home/node/.dsh \
   -e PROXY_USERNAME=yourname \
   -e PROXY_PASSWORD=yourpass \
   --restart unless-stopped \
@@ -171,7 +233,7 @@ docker run -d \
 docker run -d \
   --name dsh-harness \
   -p 3088:3088 \
-  -v dsh-data:/root/.dsh \
+  -v dsh-data:/home/node/.dsh \
   -e PROXY_PORT=3088 \
   --restart unless-stopped \
   smanx/deepseek-harness:latest
@@ -179,10 +241,23 @@ docker run -d \
 
 ## Data Persistence
 
-DSH session/configuration data lives in `/root/.dsh` inside the container; the commands above persist it via the named volume `dsh-data`:
+DSH session/configuration data lives in `/home/node/.dsh` inside the container; the commands above persist it via the named volume `dsh-data`:
 
 - Data survives `docker stop/start` and container removal;
 - To wipe it completely: `docker volume rm dsh-data` (stop the container first).
+
+To use a bind mount instead, hand the host directory to UID/GID `1000` first:
+
+```bash
+sudo mkdir -p /srv/dsh-data
+sudo chown -R 1000:1000 /srv/dsh-data
+docker run -d \
+  --name dsh-harness \
+  -p 3080:3080 \
+  -v /srv/dsh-data:/home/node/.dsh \
+  --restart unless-stopped \
+  smanx/deepseek-harness:latest
+```
 
 ## Stop / Restart / Remove
 

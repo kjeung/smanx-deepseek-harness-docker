@@ -42,7 +42,7 @@ docker build -t smanx/deepseek-harness .
 docker run -d \
   --name dsh-harness \
   -p 3080:3080 \
-  -v dsh-data:/root/.dsh \
+  -v dsh-data:/home/node/.dsh \
   --restart unless-stopped \
   smanx/deepseek-harness
 
@@ -58,6 +58,11 @@ docker rm dsh-harness
 Linux 下 node-pty 没有预编译产物，会从源码编译（Dockerfile 已用多阶段构建装好 python3/make/g++，
 编译完成后运行镜像不保留编译工具）。
 
+容器默认以非 root 用户 **`node`（UID/GID `1000:1000`）** 运行：PID 1 与应用进程都是 `node`，
+数据目录是 `/home/node/.dsh`；`/app`、`/usr/local` 归 `root:root` 且只读。
+因此 `docker exec` 默认就是 `node` 用户（`docker exec dsh-harness id` → `uid=1000(node)`），
+需要 root 时显式使用 `docker exec -u 0 dsh-harness id`（仅紧急排障）。
+
 ## 各 tag 的区别
 
 默认运行镜像为精简版，不保留编译工具，适合生产部署。若需要在容器内开发/调试，
@@ -69,11 +74,11 @@ Linux 下 node-pty 没有预编译产物，会从源码编译（Dockerfile 已�
 
 | tag（最新） | 版本 tag | 定位 | 包含工具 |
 |---|---|---|---|
-| `smanx/deepseek-harness:latest` | `smanx/deepseek-harness:<版本>` | 原版精简镜像，适合生产部署 | 无开发工具 |
-| `smanx/deepseek-harness:devtools-min-latest` | `smanx/deepseek-harness:devtools-min-<版本>` | 精简工具版，常用调试工具 | git、curl、wget、nano、jq、procps、ca-certificates、unzip；npm 全局包：pnpm；uv |
-| `smanx/deepseek-harness:devtools-latest` | `smanx/deepseek-harness:devtools-<版本>` | 完整工具版，可在容器内开发/编译 | 精简版全部 + vim、openssh-client、zip、htop、tmux、tree、openssl、python3、build-essential(make+g++)、bash-completion；npm 全局包：pnpm；uv |
-| `smanx/deepseek-harness:test-latest` | `smanx/deepseek-harness:test-<版本>` | 测试 tag：完整工具 + 自动安装 DSH 插件 | 同完整工具版（含 pnpm、uv）；DSH 安装后额外执行 `dsh plugin --profile web add github:smanx/dsh-conversation-indicator#main` |
-| `smanx/deepseek-harness:admin-latest` | `smanx/deepseek-harness:admin-<版本>` | 管理版：**预装最新 DSH**，开箱即用，管理台可自选版本安装/切换 | 同完整工具版（含 pnpm、uv）+ 管理服务；保留 python3/build-essential 供运行时编译 node-pty |
+| `smanx/deepseek-harness:latest` | `smanx/deepseek-harness:<版本>` | 原版精简镜像，适合生产部署 | 无开发工具；pnpm 12.14.0 |
+| `smanx/deepseek-harness:devtools-min-latest` | `smanx/deepseek-harness:devtools-min-<版本>` | 精简工具版，常用调试工具 | git、curl、wget、nano、jq、procps、ca-certificates、unzip；pnpm 12.14.0；uv |
+| `smanx/deepseek-harness:devtools-latest` | `smanx/deepseek-harness:devtools-<版本>` | 完整工具版，可在容器内开发/编译 | 精简版全部 + vim、openssh-client、zip、htop、tmux、tree、openssl、python3、build-essential(make+g++)、bash-completion；pnpm 12.14.0；uv |
+| `smanx/deepseek-harness:test-latest` | `smanx/deepseek-harness:test-<版本>` | 测试 tag：完整工具 + 自动安装 DSH 插件 | 同完整工具版（含 pnpm 12.14.0、uv）；DSH 安装后额外执行 `dsh plugin --profile web add github:smanx/dsh-fixed-providers#master` |
+| `smanx/deepseek-harness:admin-latest` | `smanx/deepseek-harness:admin-<版本>` | 管理版：**预装最新 DSH**，开箱即用，管理台可自选版本安装/切换 | 同完整工具版（含 pnpm 12.14.0、uv）+ 管理服务；保留 python3/build-essential 供运行时编译 node-pty |
 
 ```bash
 # 精简工具版（DEV_TOOLS=前缀与 .build-variants 第一列一致）
@@ -91,12 +96,15 @@ docker build -t smanx/deepseek-harness:devtools-<版本> --build-arg DEV_TOOLS=d
 > 版本号随 `@deepseek-ai/dsh` 实际版本更新，例如升级到 `0.2.0` 后 tag 应改为
 > `devtools-0.2.0` / `devtools-min-0.2.0`。
 
-> 工具版（devtools / devtools-min / test）内置 **pnpm**（npm 全局安装），
-> DSH 的 `dsh plugin` 命令依赖 pnpm 管理插件，社区插件市场 [dsh-market](https://github.com/dsh-market/dsh-market)
-> （`dsh plugin --profile web add dshmarket`）也需要它；精简版 `latest` 不内置，首次使用插件时
-> dsh-market 会检测缺失并提供一键自动安装。
+> **pnpm 12.14.0 已内置所有变体**（含精简版 `latest`），由 Dockerfile 统一安装，运行期以 `node`
+> 用户只读+执行；DSH 的 `dsh plugin` 命令依赖它管理插件，社区插件市场
+> [dsh-market](https://github.com/dsh-market/dsh-market)（`dsh plugin --profile web add dshmarket`）
+> 也直接可用，无需再安装 pnpm。
 >
-> 工具版还内置 **uv**（Python 包管理器，静态二进制，不依赖系统 Python）。
+> `github:` 形式的插件（如 `dsh plugin --profile web add github:owner/repo`）在安装时需要 `git`，
+> 只有 **devtools / devtools-min / test / admin** 变体带 git；精简版 `latest` 请改用 npm 包名安装插件。
+>
+> 带开发工具的变体（devtools-min / devtools / test / admin）还内置 **uv**（Python 包管理器，静态二进制，不依赖系统 Python）。
 > 不少社区 MCP server 以 `uvx` / `uv run` 方式启动（DSH 的 MCP 客户端配置中常见
 > `"command": "uvx"`），缺少 uv 时这类 MCP 无法运行；uv 会在首次使用时按需下载 Python 解释器。
 
@@ -120,7 +128,7 @@ docker build -t smanx/deepseek-harness:devtools-<版本> --build-arg DEV_TOOLS=d
 docker run -d \
   --name dsh-harness \
   -p 3080:3080 \
-  -v dsh-data:/root/.dsh \
+  -v dsh-data:/home/node/.dsh \
   -v dsh-install:/opt/dsh \
   --restart unless-stopped \
   smanx/deepseek-harness:admin-latest
@@ -129,6 +137,53 @@ docker run -d \
 > admin 变体保留了 `python3` + `build-essential`：node-pty 在 Linux 上没有预编译产物，
 > 在管理台安装其他版本 DSH 时需要容器内从源码编译原生模块，因此该镜像比精简版略大。
 > admin 变体预装最新 DSH，版本号 tag 即为 DSH 版本（如 `admin-0.1.1`）。
+> admin 需要写 `/opt/dsh`、`/home/node/.dsh` 与 `/tmp`，因此**不支持 `--read-only`**。
+
+## 运行用户与权限（非 root）
+
+所有变体都以 `node`（UID/GID `1000:1000`）运行，镜像里静态设置了 `USER node`：
+
+| 路径 | 属主/权限 | 用途 |
+|---|---|---|
+| `/app` | `root:root 0755` | 代理与管理服务代码，只读 |
+| `/usr/local` | `root:root 0755` | Node 与 DSH 全局包，只读+执行 |
+| `/home/node/.dsh` | `1000:1000` | DSH 数据目录（建议挂命名卷） |
+| `/opt/dsh` | `1000:1000` | admin 的 DSH 安装目录（建议挂命名卷） |
+| `/tmp` | 可写 | 日志 `/tmp/.dsh-web.log`、launch token `/tmp/.dsh-launch-token`（`0600`） |
+
+- `docker exec` 默认就是 `node` 用户；`docker exec -u 0` 只是紧急排障入口，不属于正常运行路径；
+- **bind mount** 由宿主目录的权限决定，挂载前先 `sudo chown -R 1000:1000 <宿主目录>`，
+  否则容器内 `node` 无法写入数据目录；
+- 命名卷首次挂载会继承属主，不受宿主 UID 影响，推荐优先使用。
+
+## 可选加固
+
+```bash
+# 最小权限 + 禁止提权（所有变体）
+docker run -d \
+  --name dsh-harness \
+  -p 3080:3080 \
+  -v dsh-data:/home/node/.dsh \
+  --cap-drop=ALL \
+  --security-opt no-new-privileges \
+  --restart unless-stopped \
+  smanx/deepseek-harness:latest
+
+# 只读 rootfs（latest / devtools-min / devtools / test；admin 不支持）
+docker run -d \
+  --name dsh-harness \
+  -p 3080:3080 \
+  -v dsh-data:/home/node/.dsh \
+  --read-only \
+  --tmpfs /tmp:rw,size=64m \
+  --restart unless-stopped \
+  smanx/deepseek-harness:latest
+```
+
+- `--read-only` 只读 rootfs，命名卷与 tmpfs 仍可写；日志/token/临时文件都落在 `/tmp`，需挂 `--tmpfs /tmp`；
+- 不要在 `/tmp` 上加 `noexec`：DSH 会在 `/tmp` 写 shell 集成脚本，`noexec` 可能让工具执行失败；
+- admin 需要写 `/opt/dsh`、`/home/node/.dsh`、`/tmp` 和 npm cache，不支持 `--read-only`；
+- 静态 `USER node` 不需要 root 初始化，`--cap-drop=ALL` 不会打断启动（没有 chown/setuid 步骤）。
 
 ## 端口配置
 
@@ -154,7 +209,7 @@ admin 变体另有以下环境变量：
 docker run -d \
   --name dsh-harness \
   -p 3080:3080 \
-  -v dsh-data:/root/.dsh \
+  -v dsh-data:/home/node/.dsh \
   -e DSH_PORT=3082 \
   --restart unless-stopped \
   smanx/deepseek-harness
@@ -174,7 +229,7 @@ docker run -d \
 docker run -d \
   --name dsh-harness \
   -p 3080:3080 \
-  -v dsh-data:/root/.dsh \
+  -v dsh-data:/home/node/.dsh \
   -e PROXY_USERNAME=yourname \
   -e PROXY_PASSWORD=yourpass \
   --restart unless-stopped \
@@ -190,8 +245,21 @@ docker run -d \
 
 ## 数据持久化
 
-DSH 的会话/配置数据保存在命名卷 `dsh-data`（容器内 `/root/.dsh`）。
+DSH 的会话/配置数据保存在命名卷 `dsh-data`（容器内 `/home/node/.dsh`）。
 `docker stop/start` 与删除容器后卷仍在，数据不丢；彻底清除需先停容器再 `docker volume rm dsh-data`。
+
+如果改用 bind mount，必须先把宿主目录交给 UID/GID `1000`：
+
+```bash
+sudo mkdir -p /srv/dsh-data
+sudo chown -R 1000:1000 /srv/dsh-data
+docker run -d \
+  --name dsh-harness \
+  -p 3080:3080 \
+  -v /srv/dsh-data:/home/node/.dsh \
+  --restart unless-stopped \
+  smanx/deepseek-harness
+```
 
 ## 说明
 
