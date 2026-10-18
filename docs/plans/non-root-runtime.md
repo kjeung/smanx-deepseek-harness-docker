@@ -46,8 +46,8 @@
 | bind mount | 固定 UID/GID 1000；宿主目录先 `chown -R 1000:1000` |
 | pnpm | `12.14.0`，所有变体内置（构建期 root 安装，运行期只读+执行） |
 | test 预装插件 | 构建期以 `node` 用户执行 `dsh plugin`，profile 归 node |
-| git | 只在 devtools-min/devtools/test；`github:` 插件需 devtools 变体 |
-| admin 与 read-only | admin 不支持 `--read-only`；latest/devtools 可选 |
+| git | devtools-min/devtools/test/admin（admin 另含运行期编译工具）；`github:` 插件需带 git 的变体 |
+| admin 与 read-only | admin 不支持 `--read-only`；latest/devtools-min/devtools/test 支持 |
 | 文档 | 只描述目标状态；README_EN/DOCKERHUB.en 同步；方案文档中文 |
 
 ## 3. 逐文件目标配置
@@ -270,8 +270,8 @@ devtools-min|git curl wget nano jq procps ca-certificates unzip||1
 - 数据持久化路径 `/home/node/.dsh`。
 - `docker exec` 默认 node；`docker exec -u 0` 仅紧急排障。
 - bind mount 宿主目录先 `chown -R 1000:1000`。
-- pnpm `12.14.0` 已内置所有变体；dsh-market 不再需要自动安装 pnpm；`github:` 插件需要 devtools 变体。
-- 可选加固单独一节（见 §4.4）。
+- pnpm `12.14.0` 已内置所有变体；dsh-market 不再需要自动安装 pnpm；`github:` 插件需要带 git 的变体。
+- 可选加固单独一节（见 §4.3）。
 - 只描述目标状态；不写旧路径、旧命令、迁移/回滚、历史或“破坏性变更”章节。
 - README_EN / DOCKERHUB.en 与中文同步。
 
@@ -360,6 +360,7 @@ docker run ... \
 - `--read-only` 只读 rootfs，volume/tmpfs 仍可写；需要 `--tmpfs /tmp` 放日志/token/临时文件。
 - tmpfs 必须显式带 `exec`：Docker 的 tmpfs 默认 `noexec`，而 DSH 会把原生绑定复制到 `/tmp` 再加载，缺 `exec` 时启动报 `No usable native binding`。
 - 不要在 `/tmp` 上加 `noexec`：DSH 会在 `/tmp` 写 shell 集成脚本与原生绑定缓存，`noexec` 会让工具执行/启动失败。
+- `--read-only` 下 `$HOME` 除 `/home/node/.dsh` 卷外只读：页面、会话与 `dsh plugin` 安装（pnpm store 在 `.dsh` 卷内）可用；`uv`/`uvx` 首次下载 Python、npm 全局缓存等写 `$HOME` 的操作不可用，需要时给对应目录额外挂 tmpfs/卷。
 - admin 需要写 `/opt/dsh`、`/home/node/.dsh`、`/tmp`、npm cache，不支持 `--read-only`。
 - `--cap-drop=ALL` 与静态 `USER node` 兼容；不需要 root 初始化，所以不会打断 chown/setuid。
 
@@ -397,6 +398,11 @@ docker exec -u 0 dsh-harness id     # uid=0，仅紧急排障
 | 可写断言 | `docker exec <ct> touch /home/node/.dsh/x` | 成功 |
 | 紧急 root | `docker exec -u 0 <ct> id` | uid=0（仅紧急路径） |
 
+说明：
+
+- `latest` 不装 `procps`，进程断言用宿主 `docker top <ct>`。
+- admin 的 DSH 在 `/opt/dsh` 安装卷且必须可写，安装目录只读断言仅适用于非 admin 变体。
+
 ### 5.3 冒烟矩阵
 
 | 变体 | 必测 |
@@ -411,7 +417,7 @@ docker exec -u 0 dsh-harness id     # uid=0，仅紧急排障
 
 - 每个变体：默认用户 node、PID 1 node、关键目录属主正确、页面/WS 可用、数据在 `/home/node/.dsh`、无 root 进程。
 - admin：两个卷都非 `:ro`；`state.json` 可写；安装/切换/重启成功；不能加 `--read-only`。
-- latest：不装 git；`github:` 插件需 devtools 变体。
+- latest：不装 git；`github:` 插件需带 git 的变体。
 - bind mount：宿主目录 `chown -R 1000:1000`；Docker Desktop/rootless 的 UID 映射需实测。
 - MCP/uvx 真实会话：可选加项，不计入 pass/fail。
 
@@ -429,10 +435,10 @@ docker exec -u 0 dsh-harness id     # uid=0，仅紧急排障
 **已知限制**
 
 - admin 变体不支持 `--read-only`（需要写 `/opt/dsh`、`/home/node/.dsh`、`/tmp`、npm cache）。
-- latest 变体不装 git；`github:` 插件需要 devtools 变体。
+- latest 变体不装 git；`github:` 插件需要带 git 的变体（devtools-min/devtools/test/admin）。
 - bind mount 固定 UID/GID 1000；宿主 UID 不是 1000 时用命名卷或 `chown`。
 - Docker Desktop / userns-remap / rootless 的 UID 映射与 Linux Engine 不同，需在目标平台实测。
-- pnpm store / uv Python 下载在 HOME 下，不持久化；容器重建后可重建。
+- pnpm store / uv Python 下载在 HOME 下，不持久化；容器重建后可重建。`--read-only` 模式只有 DSH_HOME 卷可写，uv/uvx 首次下载 Python 等写 HOME 的操作不可用。
 - MCP/uvx 真实会话回归为可选加项。
 
 **不在范围**
