@@ -185,15 +185,17 @@ docker run -d \
   -p 3080:3080 \
   -v dsh-data:/home/node/.dsh \
   --read-only \
-  --tmpfs /tmp:rw,size=64m \
+  --tmpfs /tmp:rw,exec,size=64m \
   --restart unless-stopped \
   smanx/deepseek-harness:latest
 ```
 
 - `--read-only` only makes the rootfs read-only; named volumes and tmpfs stay writable — logs, token
-  and temporary files all live in `/tmp`, hence `--tmpfs /tmp`;
-- Do not add `noexec` to `/tmp`: DSH writes shell integration scripts there, and `noexec` may break
-  tool execution;
+  and temporary files all live in `/tmp`, hence `--tmpfs /tmp` with an explicit `exec`: Docker mounts
+  tmpfs `noexec` by default, and DSH copies its native bindings into `/tmp` before loading them, so
+  omitting `exec` makes startup fail;
+- Do not add `noexec` to `/tmp`: DSH writes shell integration scripts and native-binding caches there,
+  and `noexec` may break tool execution or startup;
 - admin writes `/opt/dsh`, `/home/node/.dsh`, `/tmp` and the npm cache, so it does not support `--read-only`;
 - the static `USER node` needs no root initialization, so `--cap-drop=ALL` does not break startup
   (there are no chown/setuid steps).

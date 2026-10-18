@@ -175,13 +175,13 @@ docker run -d \
   -p 3080:3080 \
   -v dsh-data:/home/node/.dsh \
   --read-only \
-  --tmpfs /tmp:rw,size=64m \
+  --tmpfs /tmp:rw,exec,size=64m \
   --restart unless-stopped \
   smanx/deepseek-harness:latest
 ```
 
-- `--read-only` 只读 rootfs，命名卷与 tmpfs 仍可写；日志/token/临时文件都落在 `/tmp`，需挂 `--tmpfs /tmp`；
-- 不要在 `/tmp` 上加 `noexec`：DSH 会在 `/tmp` 写 shell 集成脚本，`noexec` 可能让工具执行失败；
+- `--read-only` 只读 rootfs，命名卷与 tmpfs 仍可写；日志/token/临时文件都落在 `/tmp`，需挂 `--tmpfs /tmp`，并显式带 `exec`：Docker 的 tmpfs 默认 `noexec`，而 DSH 会把原生绑定复制到 `/tmp` 再加载，缺 `exec` 时启动会失败；
+- 不要在 `/tmp` 上加 `noexec`：DSH 会在 `/tmp` 写 shell 集成脚本与原生绑定缓存，`noexec` 会让工具执行或启动失败；
 - admin 需要写 `/opt/dsh`、`/home/node/.dsh`、`/tmp` 和 npm cache，不支持 `--read-only`；
 - 静态 `USER node` 不需要 root 初始化，`--cap-drop=ALL` 不会打断启动（没有 chown/setuid 步骤）。
 

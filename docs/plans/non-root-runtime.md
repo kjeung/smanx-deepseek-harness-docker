@@ -347,10 +347,10 @@ docker run ... \
   --security-opt no-new-privileges \
   smanx/deepseek-harness:latest
 
-# 只读 rootfs（latest/devtools；admin 不支持）
+# 只读 rootfs（latest/devtools-min/devtools/test；admin 不支持）
 docker run ... \
   --read-only \
-  --tmpfs /tmp:rw,size=64m \
+  --tmpfs /tmp:rw,exec,size=64m \
   -v dsh-data:/home/node/.dsh \
   smanx/deepseek-harness:latest
 ```
@@ -358,7 +358,8 @@ docker run ... \
 说明：
 
 - `--read-only` 只读 rootfs，volume/tmpfs 仍可写；需要 `--tmpfs /tmp` 放日志/token/临时文件。
-- 不要在 `/tmp` 上加 `noexec`：DSH 会在 `/tmp` 写 shell 集成脚本，`noexec` 可能让工具执行失败。
+- tmpfs 必须显式带 `exec`：Docker 的 tmpfs 默认 `noexec`，而 DSH 会把原生绑定复制到 `/tmp` 再加载，缺 `exec` 时启动报 `No usable native binding`。
+- 不要在 `/tmp` 上加 `noexec`：DSH 会在 `/tmp` 写 shell 集成脚本与原生绑定缓存，`noexec` 会让工具执行/启动失败。
 - admin 需要写 `/opt/dsh`、`/home/node/.dsh`、`/tmp`、npm cache，不支持 `--read-only`。
 - `--cap-drop=ALL` 与静态 `USER node` 兼容；不需要 root 初始化，所以不会打断 chown/setuid。
 
@@ -420,7 +421,7 @@ docker exec -u 0 dsh-harness id     # uid=0，仅紧急排障
 - **`runuser` 缺失**：test 构建期插件安装失败；改用 `su node -s /bin/bash -c ...` 或 root + `chown -R node:node /home/node`。
 - **pnpm 缺失**：`dsh plugin` 退出 127；检查 `/usr/local/bin/pnpm` 与 `ARG PNPM_VERSION`。
 - **沙箱 fail-closed**：`bwrap`/`landlock` 不可用时 `workspace-write` 的 bash 工具失败；先确认内核 Landlock 或装 bubblewrap；`DSH_PERMISSION_MODE=danger-full-access` 仅排障。
-- **`--read-only` 失败**：确认 `/tmp` tmpfs、`/home/node/.dsh` 卷、admin 的 `/opt/dsh` 卷；admin 直接不支持 read-only。
+- **`--read-only` 失败**：先确认 `/tmp` tmpfs 带 `exec`（Docker 默认 `noexec`，缺它会报 `No usable native binding`），再确认 `/home/node/.dsh` 卷、admin 的 `/opt/dsh` 卷；admin 直接不支持 read-only。
 - **node-pty 失败**：确认 `/dev/ptmx`、`/dev/pts`；其它架构确认 `python3/make/g++` 与 `~/.cache/node-gyp`。
 
 ## 6. 已知限制与不在范围
