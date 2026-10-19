@@ -1,97 +1,91 @@
-# DSH（DeepSeek Harness）需要 Node.js；官方 npm 包 @deepseek-ai/dsh 已验证可在 Node 24 运行
-# （官方以 Node 24.19.0 构建/验证）
-#
-# 关键点：@deepseek-ai/dsh 依赖的原生模块 node-pty（终端）在 npm 包里只带 macOS/Windows
-# 的预编译产物（prebuilds/ 下仅有 darwin-arm64/darwin-x64/win32-arm64/win32-x64），
-# Linux 上没有任何预编译二进制，安装时必然回退到 node-gyp 从源码编译，需要
-# python3 + make + g++。node:24-slim 不含这些工具，直接 `npm install -g @deepseek-ai/dsh`
-# 会报：
-#   gyp ERR! find Python ... Could not find any Python installation to use
-# 因此采用多阶段构建：先在带编译工具的阶段安装 DSH（顺带编译 node-pty），
-# 再把 /usr/local（Node + DSH + 编译产物）复制进精简运行镜像，运行镜像不保留编译工具。
+ARG PNPM_VERSION=12.14.0
 
-# ── 阶段 1：安装 DSH 并编译原生模块 ────────────────────────────────
-# admin 变体预装最新 DSH（@next）到 /opt/dsh（即管理服务的安装目录，挂载空卷时自动填充、开箱即用）
+# ── 构建阶段：安装 DSH；admin 变体预装到 /opt/dsh ──────────────
 FROM node:24-slim AS dsh-builder
 ARG DEV_TOOLS=none
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 make g++ \
-    && rm -rf /var/lib/apt/lists/* \
-    && if [ "$DEV_TOOLS" = "admin" ]; then \
-         npm install -g --prefix /opt/dsh --no-audit --no-fund @deepseek-ai/dsh@next; \
-       else \
-         npm install -g --no-audit --no-fund @deepseek-ai/dsh@next; \
-       fi \
-    && mkdir -p /opt/dsh
+ && apt-get install -y --no-install-recommends python3 make g++ \
+ && rm -rf /var/lib/apt/lists/* \
+ && if [ "$DEV_TOOLS" = "admin" ]; then \
+      npm install -g --prefix /opt/dsh --no-audit --no-fund @deepseek-ai/dsh@next; \
+    else \
+      npm install -g --no-audit --no-fund @deepseek-ai/dsh@next; \
+    fi \
+ && mkdir -p /opt/dsh
 
-# ── 阶段 2：精简运行镜像 ───────────────────────────────────────────
+# ── 运行阶段 ───────────────────────────────────────────────────
 FROM node:24-slim
+ARG DEV_TOOLS=none
+ARG PNPM_VERSION
 WORKDIR /app
 
-# 开发工具变体开关：none（默认，不装）| <tag 前缀>（如 devtools / devtools-min）
-# 构建时通过 --build-arg DEV_TOOLS=<前缀> 启用；各前缀要安装的工具由
-# .build-variants 文件按前缀定义，直接编辑该文件即可增删工具
-ARG DEV_TOOLS=none
-
-# 复制 Node 运行时 + DSH（含编译好的 node-pty）。两阶段同为 node:24-slim，
-# /usr/local 内容一致，仅多出 npm 全局安装的 @deepseek-ai/dsh
+# Node + DSH 全局包：/usr/local 保持 root-owned
 COPY --from=dsh-builder /usr/local/ /usr/local/
 
-# admin 变体：把构建阶段预装的最新 DSH 复制到管理服务安装目录 /opt/dsh
-# （首次挂载空卷时 Docker 自动填充该目录，管理服务启动即识别并自动拉起 DSH）
-COPY --from=dsh-builder /opt/dsh/ /opt/dsh/
+# admin 的预装 DSH 目录：归 node；非 admin 变体是空目录，归 node 无害
+COPY --chown=1000:1000 --from=dsh-builder /opt/dsh/ /opt/dsh/
 
-# 生成版本文件，供 CI（docker-build/.github/workflows/projects.yml）用 docker cp 提取 APP_VERSION 打镜像标签；
-# 若该文件缺失，CI 会回退为日期标签；admin 变体预装在 /opt/dsh，其余变体在 /usr/local
+# 必须可写的目录：/opt/dsh（admin 安装）、/home/node/.dsh（DSH 数据）
+RUN install -d -m 0755 -o node -g node /opt/dsh /home/node/.dsh
+
+# 版本文件（CI 打 tag 用）
 RUN if [ "$DEV_TOOLS" = "admin" ]; then \
       node -p "'APP_VERSION=' + require('/opt/dsh/lib/node_modules/@deepseek-ai/dsh/package.json').version" > /tmp/app_version.env; \
     else \
       node -p "'APP_VERSION=' + require('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json').version" > /tmp/app_version.env; \
     fi
 
-# 代理代码及其依赖（http-proxy）
+# 代理与管理服务：/app 保持 root-owned
 COPY proxy/ /app/proxy/
 RUN cd /app/proxy && npm install --omit=dev --no-audit --no-fund
 
-# 管理服务（admin 变体专用）：页面安装/切换 DSH 版本、配置 npm 源、托管 DSH 进程并反向代理
 COPY manager/ /app/manager/
 RUN cd /app/manager && npm install --omit=dev --no-audit --no-fund
 
-# 启动脚本（默认流程：先启动 DSH，等待就绪后启动代理）
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
-# admin 变体标记：镜像内存在 /app/.admin-mode 时 entrypoint.sh 改走管理服务
-# （预装最新 DSH，管理台仍可自选版本安装/切换、配置 npm 源）
+# admin 变体标记
 RUN if [ "$DEV_TOOLS" = "admin" ]; then touch /app/.admin-mode; fi
 
-# ── 开发工具（按 DEV_TOOLS 前缀从 .build-variants 读取工具列表安装）──
-# .build-variants 每行：<tag前缀>|<apt 工具列表>|<npm 全局包列表（可空）>|<uv 安装标记（1=装/空=不装）>，DEV_TOOLS 取第一列前缀值
-# 基础镜像（DEV_TOOLS=none）不装任何工具
+# 开发工具：apt / npm 全局包 / uv，构建期 root
 COPY .build-variants /app/.build-variants
 RUN if [ -n "$DEV_TOOLS" ] && [ "$DEV_TOOLS" != "none" ]; then \
       PACKAGES="$(awk -F'|' -v p="$DEV_TOOLS" '$1==p {print $2}' /app/.build-variants)"; \
       NPM_PKGS="$(awk -F'|' -v p="$DEV_TOOLS" '$1==p {print $3}' /app/.build-variants)"; \
       UV_FLAG="$(awk -F'|' -v p="$DEV_TOOLS" '$1==p {print $4}' /app/.build-variants)"; \
       if [ -n "$PACKAGES" ]; then \
-        apt-get update \
-        && apt-get install -y --no-install-recommends $PACKAGES \
+        apt-get update && apt-get install -y --no-install-recommends $PACKAGES \
         && rm -rf /var/lib/apt/lists/*; \
       fi; \
-      if [ -n "$NPM_PKGS" ]; then \
-        npm install -g --no-audit --no-fund $NPM_PKGS; \
-      fi; \
+      if [ -n "$NPM_PKGS" ]; then npm install -g --no-audit --no-fund $NPM_PKGS; fi; \
       if [ "$UV_FLAG" = "1" ]; then \
         curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh; \
       fi; \
     fi
 
-# ── 特殊测试 tag（DEV_TOOLS=test）：DSH 安装完毕后额外安装插件 ────────
+# pnpm：所有变体统一 pin 版本；构建期 root，运行期 node 只读+执行
+RUN npm install -g --no-audit --no-fund pnpm@${PNPM_VERSION}
+
+# test 变体：以 node 用户预装插件，profile 直接归 node
 RUN if [ "$DEV_TOOLS" = "test" ]; then \
-      dsh plugin --profile web add github:smanx/dsh-fixed-providers#master; \
+      command -v runuser >/dev/null 2>&1 || { echo "runuser missing"; exit 1; }; \
+      runuser -u node -- env HOME=/home/node \
+        DSH_HOME=/home/node/.dsh \
+        PNPM_HOME=/home/node/.local/share/pnpm \
+        PATH=/usr/local/bin:$PATH \
+        dsh plugin --profile web add github:smanx/dsh-fixed-providers#master; \
     fi
 
-# 对外端口：代理/管理服务默认均监听 3080（DSH 在容器内监听 127.0.0.1:<DSH_PORT>，不直接暴露）
-EXPOSE 3080
+# 运行期环境：HOME / DSH 路径 / 日志与 token
+ENV HOME=/home/node \
+    DSH_HOME=/home/node/.dsh \
+    DSH_WEB_LOG=/tmp/.dsh-web.log \
+    DSH_TOKEN_FILE_AUTO=/tmp/.dsh-launch-token \
+    SHELL=/bin/bash
 
+# 关键：静态 USER node，放在所有 root 操作之后
+USER node
+
+EXPOSE 3080
 ENTRYPOINT ["/app/entrypoint.sh"]

@@ -5,8 +5,8 @@
 // 若每请求都带 token，上游会为每个请求签发一个全新身份，出现身份错乱。
 const fs = require('fs');
 
-const LOG_FILE = process.env.DSH_WEB_LOG || '/app/.dsh-web.log';
-const TOKEN_FILE_AUTO = process.env.DSH_TOKEN_FILE_AUTO || '/app/.dsh-launch-token';
+const LOG_FILE = process.env.DSH_WEB_LOG || '/tmp/.dsh-web.log';
+const TOKEN_FILE_AUTO = process.env.DSH_TOKEN_FILE_AUTO || '/tmp/.dsh-launch-token';
 // 官方 DSH 0.1.2+ 的 launch token 通过「首页 URL 上的 ?token=」传入（见 dsh web 打印的
 // 地址格式），换取会话 cookie；不接受把 token 放请求头，因此这里用 query 追加。
 const TOKEN_QUERY_KEY = process.env.DSH_TOKEN_QUERY_KEY || 'token';
@@ -79,7 +79,11 @@ function scanOnce() {
   const token = extractFromText(readTail(LOG_FILE, 512 * 1024));
   if (token) {
     const t = token.trim();
-    try { fs.writeFileSync(TOKEN_FILE_AUTO, t); } catch {}
+    try {
+      fs.writeFileSync(TOKEN_FILE_AUTO, t, { mode: 0o600 });
+      // 文件已存在时 mode 不生效，显式 chmod 兜底
+      try { fs.chmodSync(TOKEN_FILE_AUTO, 0o600); } catch {}
+    } catch {}
     state.token = t;
     state.source = 'auto';
     state.done = true;

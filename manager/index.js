@@ -10,7 +10,7 @@
 // 数据持久化约定：
 //   - DSH 安装到 INSTALL_DIR（建议挂载命名卷，如 dsh-install:/opt/dsh），已装版本与状态文件都在卷上，
 //     容器重建后无需重装，管理服务启动时自动识别并拉起 DSH；
-//   - DSH 自身配置/会话仍在 ~/.dsh（建议挂载 dsh-data:/root/.dsh）。
+//   - DSH 自身配置/会话仍在 $DSH_HOME（默认 /home/node/.dsh，建议挂载 dsh-data:/home/node/.dsh）。
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -24,7 +24,7 @@ const { attachBodyTransform } = require('../proxy/compression.js');
 const DSH_PORT = Number(process.env.DSH_PORT) || 3079;
 const LISTEN_PORT = Number(process.env.PROXY_PORT) || 3080;
 const TARGET_ORIGIN = `http://127.0.0.1:${DSH_PORT}`;
-const DSH_WEB_LOG = process.env.DSH_WEB_LOG || '/app/.dsh-web.log'; // DSH 运行日志落盘，供 launch-token 打捞
+const DSH_WEB_LOG = process.env.DSH_WEB_LOG || '/tmp/.dsh-web.log'; // DSH 运行日志落盘，供 launch-token 打捞
 
 // DSH 安装目录（应挂载持久卷 dsh-install:/opt/dsh）
 const INSTALL_DIR = process.env.DSH_INSTALL_DIR || '/opt/dsh';
