@@ -253,6 +253,38 @@ docker run -d \
   smanx/deepseek-harness:latest
 ```
 
+## 工作区持久化
+
+DSH 的工作区（agent 实际读写项目文件的位置）不在 `/home/node/.dsh` 数据卷里。
+容器内没有 Documents 目录时，首次进入页面不会自动创建工作区；新建工作区时
+`/home/node/workspace` 是默认建议路径，但这个目录默认在容器可写层，容器重建/删除后文件会丢。
+
+把宿主项目目录挂到这个默认路径，首次进入时按建议创建/选择工作区，数据就直接落宿主：
+
+```bash
+sudo mkdir -p /srv/dsh-workspace
+sudo chown -R 1000:1000 /srv/dsh-workspace
+docker run -d \
+  --name dsh-harness \
+  -p 3080:3080 \
+  -v dsh-data:/home/node/.dsh \
+  -v /srv/dsh-workspace:/home/node/workspace \
+  --restart unless-stopped \
+  smanx/deepseek-harness:latest
+```
+
+首次进入 DSH 页面时没有默认工作区是正常行为：新建/选择 workspace，接受
+`/home/node/workspace`（或从 HOME 里选 `workspace`），之后会话就在这个目录里读写，
+容器重启/重建不会丢。
+
+说明：
+
+- 不要用 `working_dir` 指定工作区；它只影响进程 cwd，不参与工作区默认路径或选择器。
+- 想继续用 `/workspace` 作为工作区路径：把宿主目录挂到 `/workspace`，再在页面里手动添加
+  `/workspace` 作为工作区。两种方式都需要首次手动创建一次。
+- 如果之前已经在容器内 `/home/node/workspace`（不在挂载里）建过工作区，挂载前先把数据拷出来
+  （`docker cp dsh-harness:/home/node/workspace ./backup`），否则会被挂载遮蔽。
+
 ## 停止 / 重启 / 删除
 
 ```bash
