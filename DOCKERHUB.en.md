@@ -263,6 +263,43 @@ docker run -d \
   smanx/deepseek-harness:latest
 ```
 
+## Workspace Persistence
+
+DSH workspaces (where the agent actually reads/writes project files) are not inside the
+`/home/node/.dsh` data volume. When no system Documents directory exists, the first page load
+does not create a default workspace; `/home/node/workspace` is the suggested path, and that
+directory lives in the container's writable layer — files are lost when the container is
+recreated.
+
+Mount the host project directory at that default path; accept the suggested workspace on first
+entry and data lands on the host:
+
+```bash
+sudo mkdir -p /srv/dsh-workspace
+sudo chown -R 1000:1000 /srv/dsh-workspace
+docker run -d \
+  --name dsh-harness \
+  -p 3080:3080 \
+  -v dsh-data:/home/node/.dsh \
+  -v /srv/dsh-workspace:/home/node/workspace \
+  --restart unless-stopped \
+  smanx/deepseek-harness:latest
+```
+
+No default workspace on first entry is expected: create/select a workspace and accept
+`/home/node/workspace` (or pick `workspace` under HOME); sessions then read/write there and
+survive container restarts/recreation.
+
+Notes:
+
+- Do not use `working_dir` to choose the workspace; it only sets the process cwd and does not
+  affect the default workspace path or the picker.
+- To keep using `/workspace` as the workspace path, mount the host directory at `/workspace` and
+  add `/workspace` manually in the UI. Both approaches need one manual selection on first use.
+- If a workspace was previously created inside the container at `/home/node/workspace` (not a
+  mount), copy it out first (`docker cp dsh-harness:/home/node/workspace ./backup`), otherwise the
+  mount will hide it.
+
 ## Stop / Restart / Remove
 
 ```bash
